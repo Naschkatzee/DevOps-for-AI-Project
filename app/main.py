@@ -1,4 +1,5 @@
 import json
+import uuid
 
 from typing import Optional
 
@@ -136,6 +137,60 @@ User request: {query}
         )
 
       
+def generate_itinerary_with_llm(parsed: ParsedTrip, weather_summary: str) -> list[str]:
+    days = parsed.days or 4
+    interests = ", ".join(parsed.interests) if parsed.interests else "general sightseeing"
+
+    prompt = f"""
+You are a travel planner.
+Return ONLY valid JSON: a list of {days} strings (one per day).
+No markdown. No extra text.
+
+Trip:
+- Destination: {parsed.destination}
+- Days: {days}
+- Month: {parsed.month}
+- Budget EUR: {parsed.budget_eur}
+- Interests: {interests}
+- Departure city: {parsed.departure_city}
+
+Weather summary:
+{weather_summary}
+
+Rules:
+- If rain is high on a day, plan more indoor activities.
+- Include at least one food-related idea if interests include food.
+- Include at least one culture-related idea if interests include culture.
+- Keep each day concise.
+""".strip()
+
+    try:
+        r = requests.post(
+            OLLAMA_URL,
+            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
+            timeout=120,
+        )
+        r.raise_for_status()
+        text = (r.json().get("response") or "").strip()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ollama itinerary call failed: {e}")
+
+    try:
+        data = json.loads(text)
+        if not isinstance(data, list) or not all(isinstance(x, str) for x in data):
+            raise ValueError("Itinerary must be a JSON list of strings")
+        # If model returns wrong number of days, trim/pad safely
+        if len(data) > days:
+            data = data[:days]
+        elif len(data) < days:
+            data = data + [f"Day {i+1}: Free exploration." for i in range(len(data), days)]
+        return data
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM returned invalid itinerary JSON: {e}. Raw output: {text[:300]}",
+        )
+
 
 def decide_actions(parsed: ParsedTrip) -> Decision:
     actions: list[str] = []
@@ -205,6 +260,20 @@ def get_weather_daily(city: str) -> WeatherResult:
         raise HTTPException(status_code=502, detail=f"Weather API failed: {e}")
 
 
+def summarize_weather(weather: WeatherResult, max_days: int = 4) -> str:
+    daily = weather.daily or {}
+    dates = daily.get("time") or []
+    tmax = daily.get("temperature_2m_max") or []
+    tmin = daily.get("temperature_2m_min") or []
+    rain = daily.get("precipitation_sum") or []
+
+    lines = []
+    for i in range(min(max_days, len(dates), len(tmax), len(tmin), len(rain))):
+        lines.append(f"{dates[i]}: {tmin[i]}–{tmax[i]}°C, rain {rain[i]}mm")
+    return " | ".join(lines) if lines else "No forecast available."
+
+
+
 
 @app.get("/")
 def root():
@@ -224,6 +293,7 @@ def readyz():
 
 @app.post("/v1/plan", response_model=PlanResponse)
 def create_plan(req: PlanRequest):
+    request_id = str(uuid.uuid4())
     parsed = parse_query_with_llm(req.query)
     decision = decide_actions(parsed)
 
@@ -232,16 +302,21 @@ def create_plan(req: PlanRequest):
     if "get_weather" in decision.actions and parsed.destination:
         weather = get_weather_daily(parsed.destination)
 
-    # Placeholder itinerary (Step 3: we only prove parsing works; planning comes next)
+    
     days = parsed.days or 4
-    itinerary = [f"Day {i}: (placeholder) Planned activities" for i in range(1, days + 1)]
+
+    weather_summary = "Unknown"
+    if weather is not None:
+        weather_summary = summarize_weather(weather, max_days=days)
+
+    itinerary = generate_itinerary_with_llm(parsed, weather_summary)
+   
 
     return PlanResponse(
-        request_id="demo-001",
-        summary="Parsed your request into structured data. Next step will use tools + generate a real itinerary.",
+        request_id=request_id,
+        summary="Generated itinerary using structured input and weather data.",
         itinerary=itinerary,
         parsed=parsed,
         decision=decision,
         weather=weather,
-
     )

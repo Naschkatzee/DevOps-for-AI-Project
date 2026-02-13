@@ -1,148 +1,236 @@
 # DevOps for AI – Vacation Agent Service
 
-## Project Description
+## Project Overview
 
-This project was developed for the university course **"DevOps for
-AI"**.
+This project was developed for the university course **“DevOps for AI.”**
 
-It implements a simple AI-powered vacation planning service and focuses
-on how to integrate a Large Language Model (LLM) into a structured,
-controllable, and reproducible backend system.
+It implements an AI-powered vacation planning service and demonstrates how a Large Language Model (LLM) can be integrated into a structured, controlled, observable, and reproducible backend system.
 
-The main goal is not only to use AI, but to demonstrate how AI systems
-can be:
+The goal of this project is not just to use AI, but to show how AI systems can be engineered using professional DevOps principles.
 
--   Controlled with deterministic logic
--   Validated and monitored
--   Integrated with external tools
--   Managed in a reproducible development environment
+---
 
-------------------------------------------------------------------------
+## Core Idea
+
+The system combines:
+
+- Probabilistic AI (LLM reasoning)
+- Deterministic backend logic
+- Schema validation
+- External tool integration
+- Monitoring and logging
+- Containerization for reproducibility
+
+Instead of building a chatbot, this project builds a **controlled AI agent service**.
+
+---
 
 ## What the Service Does
 
-The service receives a natural language vacation request and:
+The API receives a natural language request such as:
 
-1.  Extracts structured data using a local LLM (Ollama)
-2.  Validates the extracted data using schemas (Pydantic)
-3.  Applies deterministic decision logic
-4.  Calls an external Weather API (Open-Meteo)
-5.  Generates a day-by-day itinerary
-6.  Returns a structured JSON response
+> “I want a 4-day trip in May to Barcelona, budget €800, I like culture and food, starting from Berlin.”
 
-The system combines probabilistic AI (LLM) with deterministic backend
-logic.
+The system then:
 
-------------------------------------------------------------------------
+1. Parses the request using a local LLM (Ollama)
+2. Validates the structured output using Pydantic schemas
+3. Applies deterministic decision logic
+4. Calls external APIs (Open-Meteo for weather)
+5. Generates a day-by-day itinerary using the LLM
+6. Logs execution details for traceability
+7. Exposes metrics for monitoring
+8. Returns a structured JSON response
 
-## Example API Call
+This ensures AI output is controlled, validated, and observable.
 
-POST `/v1/plan`
-
-``` json
-{
-  "request": "I want a 4-day trip in May to Barcelona, budget €800, I like culture and food, starting from Berlin."
-}
-```
-
-Example Response (simplified):
-
-``` json
-{
-  "request_id": "uuid",
-  "parsed_data": { ... },
-  "weather": { ... },
-  "itinerary": [
-    "Day 1: ...",
-    "Day 2: ..."
-  ]
-}
-```
-
-------------------------------------------------------------------------
+---
 
 ## Architecture
 
-The system is built using:
+### Technology Stack
 
--   FastAPI -- REST API layer
--   Ollama -- Local LLM
--   Pydantic -- Schema validation
--   Open-Meteo API -- External tool integration
--   Deterministic control layer 
+- **FastAPI** – REST API framework
+- **Ollama** – Local LLM runtime
+- **Pydantic** – Schema validation
+- **Open-Meteo** – Weather API
+- **Prometheus Client** – Metrics
+- **Docker** – Containerization
 
-Processing flow:
+### Processing Flow
 
-User → API → LLM → Validation → Decision Logic → Weather API → Itinerary
-→ JSON Response
+User → API → LLM → Schema Validation → Decision Logic → External Tools → Itinerary Generation → Audit Log + Metrics → JSON Response
 
-------------------------------------------------------------------------
+---
 
-## DevOps Aspects
+## DevOps Implementation Steps
 
-This project demonstrates DevOps concepts for AI systems:
+### Step 1 – Service Skeleton
 
--   Schema validation of LLM outputs
--   Deterministic control over AI behavior
--   External API integration
--   Health check endpoint (`/healthz`)
--   Reproducible local environment (venv + requirements.txt)
--   Version-controlled development
--   Clear separation between AI logic and backend logic
+- FastAPI application
+- `/docs`
+- `/healthz`
+- `/readyz`
 
+**Meaning:** Establish a production-style API structure with health endpoints and API documentation.
 
-------------------------------------------------------------------------
+---
 
-## Running the Project Locally
+### Step 2 – Input Validation
 
-### 1. Start Ollama
+- Defined `PlanRequest` schema
+- Validated user input before processing
 
-``` bash
+**Meaning:** Prevent invalid/unsafe inputs and ensure the system fails early with clear errors.
+
+---
+
+### Step 3 – Structured LLM Parsing
+
+- LLM converts free text into structured JSON
+- Output validated using Pydantic models (with normalization)
+
+**Meaning:** Make AI output deterministic and testable by forcing a strict schema.
+
+---
+
+### Step 4 – Deterministic Decision Logic
+
+- Explicit `if/else` rules determine which tools to call
+- AI does not control system flow
+
+**Meaning:** Predictable control and safer agent behavior (LLM supports the pipeline, but does not run it).
+
+---
+
+### Step 5 – External Tool Integration
+
+- Geocoding API (Open-Meteo geocoding)
+- Weather API (Open-Meteo forecast)
+- Tool results included in final output
+
+**Meaning:** Ground the AI response in real data and handle real-world failures (timeouts, missing data).
+
+---
+
+### Step 6 – Itinerary Generation
+
+- LLM generates daily plan using structured input + weather summary
+- Output validated and normalized
+
+**Meaning:** Separate “creative generation” from data retrieval and control logic, and validate outputs like in production.
+
+---
+
+### Step 7 – Audit Logging
+
+- Each request gets a UUID
+- Execution time measured
+- Tool calls logged
+- Success and error cases recorded
+- Logs stored in JSONL format in `data/audit_log.jsonl`
+
+**Meaning:** Traceability and governance (debugging, accountability, reproducibility of decisions).
+
+---
+
+### Step 8 – Monitoring and Metrics
+
+Prometheus metrics added:
+
+- Total requests
+- Successful requests
+- Failed requests
+- Request latency
+- LLM latency
+- Tool latency
+
+Exposed via:
+
+- `GET /metrics`
+
+**Meaning:** Observability for production systems (performance tracking, error detection, later dashboards/autoscaling).
+
+---
+
+### Step 9 – Docker Containerization
+
+- Created `Dockerfile`
+- Created `.dockerignore`
+- Built Docker image
+- Verified API runs inside container
+
+**Meaning:** Reproducibility and portability (the same application runs consistently on any machine with Docker).
+
+---
+
+## Running the Project
+
+### Option 1 – Local Development
+
+Start Ollama:
+
+```bash
 ollama run llama3.2
 ```
 
-### 2. Create Python Environment
+Create environment:
 
-``` bash
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Start the API
+Start API:
 
-``` bash
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```bash
+uvicorn app.main:app --reload
 ```
 
-Open in browser:
+Open:
 
-http://127.0.0.1:8000/docs
+- http://127.0.0.1:8000/docs
 
-------------------------------------------------------------------------
+---
+
+### Option 2 – Docker (Recommended)
+
+Build image:
+
+```bash
+docker build -t vacation-agent-api:0.1 .
+```
+
+Run container (Linux):
+
+```bash
+docker run --rm --network host vacation-agent-api:0.1
+```
+
+Open:
+
+- http://127.0.0.1:8000/docs
+
+---
 
 ## Available Endpoints
 
--   POST `/v1/plan` -- Generate vacation plan
--   GET `/docs` -- Swagger UI
--   GET `/healthz` -- Health check
+- `POST /v1/plan` – Generate vacation plan
+- `GET /healthz` – Liveness check
+- `GET /readyz` – Readiness check
+- `GET /metrics` – Prometheus metrics
+- `GET /docs` – Swagger UI
 
-------------------------------------------------------------------------
+---
 
-## Future Extensions
+## Next Steps (Planned)
 
--   Docker containerization
--   CI/CD pipeline (GitHub Actions)
--   Metrics endpoint (Prometheus)
--   Logging and monitoring
--   Deployment to Kubernetes
--   Secure secret management
+- Kubernetes deployment (Deployment/Service/Ingress)
+- Helm chart for reproducible K8s installs
+- Autoscaling (HPA)
+- CI/CD pipeline (GitHub Actions)
+- Security (secrets, scanning)
 
-------------------------------------------------------------------------
+---
 
-## Conclusion
-
-This project shows how AI components can be integrated into a structured
-backend system using DevOps principles. It demonstrates how to combine
-LLM-based reasoning with deterministic software engineering practices to
-build a reliable AI service.

@@ -11,9 +11,51 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from fastapi import Response
+
 
 
 app = FastAPI(title="Vacation Agent API", version="0.3.0")
+
+REQUESTS_TOTAL = Counter(
+    "vacation_agent_requests_total",
+    "Total number of requests to /v1/plan",
+)
+
+REQUESTS_OK_TOTAL = Counter(
+    "vacation_agent_requests_ok_total",
+    "Total number of successful /v1/plan requests",
+)
+
+REQUESTS_ERROR_TOTAL = Counter(
+    "vacation_agent_requests_error_total",
+    "Total number of failed /v1/plan requests",
+)
+
+REQUEST_LATENCY = Histogram(
+    "vacation_agent_request_latency_seconds",
+    "Latency of /v1/plan in seconds",
+)
+
+LLM_LATENCY = Histogram(
+    "vacation_agent_llm_latency_seconds",
+    "Latency of LLM calls in seconds",
+)
+
+TOOL_LATENCY = Histogram(
+    "vacation_agent_tool_latency_seconds",
+    "Latency of external tool calls in seconds",
+    ["tool"],
+)
+
+TOOL_CALLS_TOTAL = Counter(
+    "vacation_agent_tool_calls_total",
+    "Total tool calls",
+    ["tool"],
+)
+
+
 
 DATA_DIR = Path("data")
 AUDIT_LOG_PATH = DATA_DIR / "audit_log.jsonl"
@@ -313,6 +355,15 @@ def write_audit_log(entry: dict) -> None:
 
 
 
+def timed_call(hist: Histogram, fn, *args, **kwargs):
+    start = time.time()
+    result = fn(*args, **kwargs)
+    hist.observe(time.time() - start)
+    return result
+
+
+
+
 @app.get("/")
 def root():
     return {"message": "Vacation Agent API is running"}
@@ -328,9 +379,16 @@ def readyz():
     # Later we'll check dependencies here (DB, Redis, etc.)
     return {"status": "ready"}
 
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.post("/v1/plan", response_model=PlanResponse)
 def create_plan(req: PlanRequest):
+    
+    REQUESTS_TOTAL.inc()
+    req_start = time.time()
+
     request_id = str(uuid.uuid4())
     started = time.time()
 
@@ -342,16 +400,19 @@ def create_plan(req: PlanRequest):
     weather_summary = "Unknown"
 
     try:
-        parsed = parse_query_with_llm(req.query)
+        parsed = timed_call(LLM_LATENCY, parse_query_with_llm, req.query)
         decision = decide_actions(parsed)
 
         if "get_weather" in decision.actions and parsed.destination:
+            TOOL_CALLS_TOTAL.labels("geocoding").inc()
+            TOOL_CALLS_TOTAL.labels("weather").inc()
             tool_calls += ["geocoding", "weather"]
-            weather = get_weather_daily(parsed.destination)
-            days = parsed.days or 4
-            weather_summary = summarize_weather(weather, max_days=days)
 
-        itinerary = generate_itinerary_with_llm(parsed, weather_summary)
+            weather = timed_call(TOOL_LATENCY.labels("weather"), get_weather_daily, parsed.destination)
+            weather_summary = summarize_weather(weather, max_days=parsed.days or 4)
+
+
+        itinerary = timed_call(LLM_LATENCY, generate_itinerary_with_llm, parsed, weather_summary)
 
         duration_ms = int((time.time() - started) * 1000)
 
@@ -367,6 +428,12 @@ def create_plan(req: PlanRequest):
             "tool_calls": tool_calls,
             "has_weather": weather is not None,
         })
+
+
+        REQUESTS_OK_TOTAL.inc()
+        REQUEST_LATENCY.observe(time.time() - req_start)
+
+
 
         return PlanResponse(
             request_id=request_id,
@@ -389,6 +456,9 @@ def create_plan(req: PlanRequest):
             "query_preview": query_preview,
             "error": {"status_code": e.status_code, "detail": e.detail},
         })
+        REQUESTS_ERROR_TOTAL.inc()
+        REQUEST_LATENCY.observe(time.time() - req_start)
+
         raise
 
     except Exception as e:
@@ -403,5 +473,8 @@ def create_plan(req: PlanRequest):
             "query_preview": query_preview,
             "error": {"type": type(e).__name__, "message": str(e)},
         })
+        REQUESTS_ERROR_TOTAL.inc()
+        REQUEST_LATENCY.observe(time.time() - req_start)
+
         raise HTTPException(status_code=500, detail="Internal server error")
 

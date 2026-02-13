@@ -7,7 +7,18 @@ import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+
 app = FastAPI(title="Vacation Agent API", version="0.3.0")
+
+DATA_DIR = Path("data")
+AUDIT_LOG_PATH = DATA_DIR / "audit_log.jsonl"
+
+
 
 # Local LLM (free) via Ollama
 OLLAMA_URL = "http://localhost:11434/api/generate"
@@ -177,19 +188,41 @@ Rules:
 
     try:
         data = json.loads(text)
-        if not isinstance(data, list) or not all(isinstance(x, str) for x in data):
-            raise ValueError("Itinerary must be a JSON list of strings")
-        # If model returns wrong number of days, trim/pad safely
-        if len(data) > days:
-            data = data[:days]
-        elif len(data) < days:
-            data = data + [f"Day {i+1}: Free exploration." for i in range(len(data), days)]
-        return data
+
+        # Case 1: correct format -> list of strings
+        if isinstance(data, list) and all(isinstance(x, str) for x in data):
+            itinerary = data
+
+        # Case 2: model returned {"day1": "...", "day2": "..."} -> convert to list
+        elif isinstance(data, dict):
+            # sort keys like day1, day2, day3...
+            def day_key(k: str) -> int:
+                digits = "".join(ch for ch in k if ch.isdigit())
+                return int(digits) if digits.isdigit() else 999
+
+            items = sorted(data.items(), key=lambda kv: day_key(kv[0]))
+            itinerary = [v for _, v in items if isinstance(v, str)]
+
+            if not itinerary:
+                raise ValueError("Dict itinerary did not contain string values")
+
+        else:
+            raise ValueError("Itinerary must be a JSON list of strings or a day-key dict")
+
+        # Ensure correct length (trim/pad)
+        if len(itinerary) > days:
+            itinerary = itinerary[:days]
+        elif len(itinerary) < days:
+            itinerary = itinerary + [f"Day {i+1}: Free exploration." for i in range(len(itinerary), days)]
+
+        return itinerary
+
     except Exception as e:
         raise HTTPException(
             status_code=502,
             detail=f"LLM returned invalid itinerary JSON: {e}. Raw output: {text[:300]}",
         )
+
 
 
 def decide_actions(parsed: ParsedTrip) -> Decision:
@@ -273,6 +306,11 @@ def summarize_weather(weather: WeatherResult, max_days: int = 4) -> str:
     return " | ".join(lines) if lines else "No forecast available."
 
 
+def write_audit_log(entry: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with AUDIT_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
 
 
 @app.get("/")
@@ -294,29 +332,76 @@ def readyz():
 @app.post("/v1/plan", response_model=PlanResponse)
 def create_plan(req: PlanRequest):
     request_id = str(uuid.uuid4())
-    parsed = parse_query_with_llm(req.query)
-    decision = decide_actions(parsed)
+    started = time.time()
 
-    
+    # Store only a small preview for privacy (optional, but good practice)
+    query_preview = req.query[:200]
+
+    tool_calls: list[str] = []
     weather = None
-    if "get_weather" in decision.actions and parsed.destination:
-        weather = get_weather_daily(parsed.destination)
-
-    
-    days = parsed.days or 4
-
     weather_summary = "Unknown"
-    if weather is not None:
-        weather_summary = summarize_weather(weather, max_days=days)
 
-    itinerary = generate_itinerary_with_llm(parsed, weather_summary)
-   
+    try:
+        parsed = parse_query_with_llm(req.query)
+        decision = decide_actions(parsed)
 
-    return PlanResponse(
-        request_id=request_id,
-        summary="Generated itinerary using structured input and weather data.",
-        itinerary=itinerary,
-        parsed=parsed,
-        decision=decision,
-        weather=weather,
-    )
+        if "get_weather" in decision.actions and parsed.destination:
+            tool_calls += ["geocoding", "weather"]
+            weather = get_weather_daily(parsed.destination)
+            days = parsed.days or 4
+            weather_summary = summarize_weather(weather, max_days=days)
+
+        itinerary = generate_itinerary_with_llm(parsed, weather_summary)
+
+        duration_ms = int((time.time() - started) * 1000)
+
+        # ---- Step 7: write audit log (success) ----
+        write_audit_log({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "request_id": request_id,
+            "status": "ok",
+            "duration_ms": duration_ms,
+            "query_preview": query_preview,
+            "parsed": parsed.model_dump(),
+            "decision": decision.model_dump(),
+            "tool_calls": tool_calls,
+            "has_weather": weather is not None,
+        })
+
+        return PlanResponse(
+            request_id=request_id,
+            summary="Generated itinerary using structured input and weather data.",
+            itinerary=itinerary,
+            parsed=parsed,
+            decision=decision,
+            weather=weather,
+        )
+
+    except HTTPException as e:
+        duration_ms = int((time.time() - started) * 1000)
+
+        # ---- Step 7: write audit log (controlled error) ----
+        write_audit_log({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "request_id": request_id,
+            "status": "error",
+            "duration_ms": duration_ms,
+            "query_preview": query_preview,
+            "error": {"status_code": e.status_code, "detail": e.detail},
+        })
+        raise
+
+    except Exception as e:
+        duration_ms = int((time.time() - started) * 1000)
+
+        # ---- Step 7: write audit log (unexpected error) ----
+        write_audit_log({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "request_id": request_id,
+            "status": "error",
+            "duration_ms": duration_ms,
+            "query_preview": query_preview,
+            "error": {"type": type(e).__name__, "message": str(e)},
+        })
+        raise HTTPException(status_code=500, detail="Internal server error")
+

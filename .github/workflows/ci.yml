@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test-build-push:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,36 +51,4 @@ jobs:
           docker push $IMAGE_NAME:latest
           docker push $IMAGE_NAME:${{ github.sha }}
 
-      - name: Install Helm
-        if: github.event_name == 'push'
-        uses: azure/setup-helm@v4
-        with:
-          version: v3.19.4
-
-      - name: Set up kubeconfig
-        if: github.event_name == 'push'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.kube
-
-          # Write kubeconfig from base64 secret 
-          printf '%s' '${{ secrets.KUBECONFIG_DATA }}' | base64 --decode > ~/.kube/config
-          chmod 600 ~/.kube/config
-
-          # Validate it is non-empty and has a context
-          test -s ~/.kube/config
-          kubectl config get-contexts
-          kubectl config current-context
-
-
-          echo -n "API server: "
-          kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}'; echo
-
-
-
-      - name: Deploy to Kubernetes with Helm
-        if: github.event_name == 'push'
-        run: |
-          helm upgrade --install vacation-agent ./helm/vacation-agent
-          kubectl rollout status deployment/vacation-agent --timeout=180s
+   

@@ -12,7 +12,6 @@ permissions:
 jobs:
   test-build-push:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,22 +51,20 @@ jobs:
           docker push $IMAGE_NAME:latest
           docker push $IMAGE_NAME:${{ github.sha }}
 
+      - name: Install Helm
+        if: github.event_name == 'push'
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.19.4
 
-       - name: Install Helm
-         if: github.event_name == 'push'
-         uses: azure/setup-helm@v4
-         with:
-           version: v3.19.4
+      - name: Set up kubeconfig
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_DATA }}" > ~/.kube/config
 
-       - name: Set up kubeconfig
-         if: github.event_name == 'push'
-         run: |
-           mkdir -p ~/.kube
-           echo "${{ secrets.KUBECONFIG_DATA }}" > ~/.kube/config
-
-       - name: Deploy to Kubernetes with Helm
-         if: github.event_name == 'push'
-         run: |
-           helm upgrade --install vacation-agent ./helm/vacation-agent
-           kubectl rollout status deployment/vacation-agent --timeout=180s
-
+      - name: Deploy to Kubernetes with Helm
+        if: github.event_name == 'push'
+        run: |
+          helm upgrade --install vacation-agent ./helm/vacation-agent
+          kubectl rollout status deployment/vacation-agent --timeout=180s

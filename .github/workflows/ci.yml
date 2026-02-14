@@ -53,7 +53,7 @@ jobs:
           docker push $IMAGE_NAME:${{ github.sha }}
 
 
-            - name: Install Helm
+      - name: Install Helm
         if: github.event_name == 'push'
         uses: azure/setup-helm@v4
         with:

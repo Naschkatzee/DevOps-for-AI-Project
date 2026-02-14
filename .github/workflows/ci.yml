@@ -61,7 +61,9 @@ jobs:
         if: github.event_name == 'push'
         run: |
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_DATA }}" > ~/.kube/config
+          echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl config view --minify
 
       - name: Deploy to Kubernetes with Helm
         if: github.event_name == 'push'

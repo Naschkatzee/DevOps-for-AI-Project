@@ -59,11 +59,20 @@ jobs:
 
       - name: Set up kubeconfig
         if: github.event_name == 'push'
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > ~/.kube/config
+
+          # Write kubeconfig from base64 secret 
+          printf '%s' '${{ secrets.KUBECONFIG_DATA }}' | base64 --decode > ~/.kube/config
           chmod 600 ~/.kube/config
-          kubectl config view --minify
+
+          # Validate it is non-empty and has a context
+          test -s ~/.kube/config
+          kubectl config get-contexts
+          kubectl config current-context
+
 
       - name: Deploy to Kubernetes with Helm
         if: github.event_name == 'push'

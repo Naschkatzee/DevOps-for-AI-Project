@@ -59,6 +59,7 @@ jobs:
 
       - name: Set up kubeconfig
         if: github.event_name == 'push'
+        shell: bash
         run: |
           mkdir -p ~/.kube
           echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > ~/.kube/config

@@ -74,6 +74,11 @@ jobs:
           kubectl config current-context
 
 
+          echo -n "API server: "
+          kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}'; echo
+
+
+
       - name: Deploy to Kubernetes with Helm
         if: github.event_name == 'push'
         run: |

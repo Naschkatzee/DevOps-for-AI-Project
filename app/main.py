@@ -14,7 +14,9 @@ from pathlib import Path
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from fastapi import Response
 
+from app.db import init_db, insert_plan
 
+import os
 
 app = FastAPI(title="Vacation Agent API", version="0.3.0")
 
@@ -63,7 +65,7 @@ AUDIT_LOG_PATH = DATA_DIR / "audit_log.jsonl"
 
 
 # Local LLM (free) via Ollama
-OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = "llama3.2"
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
@@ -434,6 +436,20 @@ def create_plan(req: PlanRequest):
         REQUEST_LATENCY.observe(time.time() - req_start)
 
 
+        insert_plan(
+    	    plan_id=request_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            query_preview=query_preview,
+            parsed=parsed.model_dump(),
+            decision=decision.model_dump(),
+            weather=weather.model_dump() if weather is not None else None,
+            itinerary=itinerary,
+            status="ok",
+            duration_ms=duration_ms,
+       )
+
+
+
 
         return PlanResponse(
             request_id=request_id,
@@ -476,5 +492,22 @@ def create_plan(req: PlanRequest):
         REQUESTS_ERROR_TOTAL.inc()
         REQUEST_LATENCY.observe(time.time() - req_start)
 
+        insert_plan(
+            plan_id=request_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            query_preview=query_preview,
+            parsed={},
+            decision={},
+            weather=None,
+            itinerary=[],
+            status="error",
+            duration_ms=duration_ms,
+        )
+
+
         raise HTTPException(status_code=500, detail="Internal server error")
 
+
+@app.on_event("startup")
+def _startup():
+    init_db()

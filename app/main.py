@@ -145,6 +145,18 @@ def normalize_llm_trip_dict(d: dict) -> dict:
     return d
 
 
+def parse_first_json_value(text: str):
+    """
+    Extract and parse the first JSON value (list/dict) from a string that may
+    contain extra junk or multiple JSON blobs.
+    """
+    decoder = json.JSONDecoder()
+    s = text.lstrip()
+    obj, idx = decoder.raw_decode(s)  # parses first JSON value
+    return obj
+
+
+
 
 def parse_query_with_llm(query: str) -> ParsedTrip:
     """
@@ -250,7 +262,7 @@ Rules:
         raise HTTPException(status_code=502, detail=f"Ollama itinerary call failed: {e}")
 
     try:
-        data = json.loads(text)
+        data = parse_first_json_value(text)
 
         # Case 1: correct format -> list of strings
         if isinstance(data, list) and all(isinstance(x, str) for x in data):

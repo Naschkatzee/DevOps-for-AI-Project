@@ -25,6 +25,7 @@ def init_db() -> None:
                 parsed_json TEXT NOT NULL,
                 decision_json TEXT NOT NULL,
                 weather_json TEXT,
+                attractions_json TEXT,
                 itinerary_json TEXT NOT NULL,
                 status TEXT NOT NULL,
                 duration_ms INTEGER NOT NULL
@@ -42,6 +43,7 @@ def insert_plan(
     parsed: dict[str, Any],
     decision: dict[str, Any],
     weather: Optional[dict[str, Any]],
+    attractions: Optional[dict[str, Any]],
     itinerary: list[str],
     status: str,
     duration_ms: int,
@@ -52,8 +54,9 @@ def insert_plan(
             INSERT INTO plans (
                 id, created_at, query_preview,
                 parsed_json, decision_json, weather_json,
+                attractions_json,
                 itinerary_json, status, duration_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 plan_id,
@@ -62,6 +65,7 @@ def insert_plan(
                 json.dumps(parsed, ensure_ascii=False),
                 json.dumps(decision, ensure_ascii=False),
                 json.dumps(weather, ensure_ascii=False) if weather is not None else None,
+                json.dumps(attractions, ensure_ascii=False) if attractions is not None else None,
                 json.dumps(itinerary, ensure_ascii=False),
                 status,
                 duration_ms,

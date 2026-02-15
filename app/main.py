@@ -70,6 +70,8 @@ OLLAMA_MODEL = "llama3.2"
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+
 
 
 # ---- Step 2: define what input should look like ----
@@ -100,6 +102,11 @@ class WeatherResult(BaseModel):
     daily: dict  # we keep it simple for now (raw daily forecast)
 
 
+class AttractionsResult(BaseModel):
+    city: str
+    items: list[str] = Field(default_factory=list)  # store just names 
+
+
 
 # ---- API response ----
 class PlanResponse(BaseModel):
@@ -109,6 +116,7 @@ class PlanResponse(BaseModel):
     parsed: ParsedTrip
     decision: Decision
     weather: Optional[WeatherResult]=None
+    attractions: Optional[AttractionsResult] = None
 
 
 def normalize_llm_trip_dict(d: dict) -> dict:
@@ -192,9 +200,16 @@ User request: {query}
         )
 
       
-def generate_itinerary_with_llm(parsed: ParsedTrip, weather_summary: str) -> list[str]:
+def generate_itinerary_with_llm(parsed: ParsedTrip, weather_summary: str, attractions: list[str]) -> list[str]:
     days = parsed.days or 4
     interests = ", ".join(parsed.interests) if parsed.interests else "general sightseeing"
+
+    attractions_text = (
+    "\n".join(f"- {a}" for a in attractions[:10])
+    if attractions
+    else "- (none found)"
+)
+
 
     prompt = f"""
 You are a travel planner.
@@ -212,7 +227,11 @@ Trip:
 Weather summary:
 {weather_summary}
 
+Attractions you may use (real places from OpenStreetMap):
+{attractions_text}
+
 Rules:
+- Prefer using the listed attractions instead of inventing new ones.
 - If rain is high on a day, plan more indoor activities.
 - Include at least one food-related idea if interests include food.
 - Include at least one culture-related idea if interests include culture.
@@ -350,6 +369,69 @@ def summarize_weather(weather: WeatherResult, max_days: int = 4) -> str:
     return " | ".join(lines) if lines else "No forecast available."
 
 
+def build_overpass_query(lat: float, lon: float, interests: list[str], radius_m: int = 6000) -> str:
+    # Map interests -> OSM filters
+    wants_food = any(x.lower() in ["food", "cuisine", "restaurants", "restaurant"] for x in interests)
+    wants_culture = any(x.lower() in ["culture", "museum", "history", "art"] for x in interests)
+
+    parts = []
+
+    # Always fetch some classic "tourism" attractions
+    parts.append(f'node(around:{radius_m},{lat},{lon})["tourism"="attraction"];')
+    parts.append(f'node(around:{radius_m},{lat},{lon})["tourism"="museum"];')
+    parts.append(f'node(around:{radius_m},{lat},{lon})["historic"];')
+
+    if wants_culture:
+        parts.append(f'node(around:{radius_m},{lat},{lon})["tourism"="gallery"];')
+        parts.append(f'node(around:{radius_m},{lat},{lon})["amenity"="theatre"];')
+
+    if wants_food:
+        parts.append(f'node(around:{radius_m},{lat},{lon})["amenity"="restaurant"];')
+        parts.append(f'node(around:{radius_m},{lat},{lon})["amenity"="cafe"];')
+        parts.append(f'node(around:{radius_m},{lat},{lon})["amenity"="bar"];')
+
+    query = f"""
+    [out:json][timeout:15];
+    (
+      {"".join(parts)}
+    );
+    out tags center;
+    """
+    return query.strip()
+
+
+def get_attractions(city: str, interests: list[str], limit: int = 10) -> AttractionsResult:
+    lat, lon = geocode_city(city)
+    q = build_overpass_query(lat, lon, interests)
+
+    try:
+        r = requests.post(OVERPASS_URL, data=q.encode("utf-8"), timeout=20)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Attractions (Overpass) API failed: {e}")
+
+    names: list[str] = []
+    for el in data.get("elements", []):
+        tags = el.get("tags") or {}
+        name = tags.get("name")
+        if name and isinstance(name, str):
+            names.append(name)
+
+    # deduplicate while preserving order
+    seen = set()
+    unique = []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            unique.append(n)
+
+    return AttractionsResult(city=city, items=unique[:limit])
+
+
+
+
+
 def write_audit_log(entry: dict) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with AUDIT_LOG_PATH.open("a", encoding="utf-8") as f:
@@ -401,6 +483,10 @@ def create_plan(req: PlanRequest):
     weather = None
     weather_summary = "Unknown"
 
+    attractions = None
+    attractions_list: list[str] = []
+
+
     try:
         parsed = timed_call(LLM_LATENCY, parse_query_with_llm, req.query)
         decision = decide_actions(parsed)
@@ -413,8 +499,34 @@ def create_plan(req: PlanRequest):
             weather = timed_call(TOOL_LATENCY.labels("weather"), get_weather_daily, parsed.destination)
             weather_summary = summarize_weather(weather, max_days=parsed.days or 4)
 
+        if "get_attractions" in decision.actions and parsed.destination:
+            TOOL_CALLS_TOTAL.labels("attractions").inc()
+            tool_calls += ["attractions"]
 
-        itinerary = timed_call(LLM_LATENCY, generate_itinerary_with_llm, parsed, weather_summary)
+            attractions = timed_call(
+                TOOL_LATENCY.labels("attractions"),
+                get_attractions,
+                parsed.destination,
+                parsed.interests,
+                10,
+            )
+            attractions_list = attractions.items
+
+            print("ATTRACTIONS OBJ:", attractions)
+            print("ATTRACTIONS COUNT:", len(attractions_list))
+            print("ATTRACTIONS SAMPLE:", attractions_list[:5])
+
+
+
+
+        itinerary = timed_call(
+            LLM_LATENCY,
+            generate_itinerary_with_llm,
+            parsed,
+            weather_summary,
+            attractions_list,
+            )
+
 
         duration_ms = int((time.time() - started) * 1000)
 
@@ -429,6 +541,8 @@ def create_plan(req: PlanRequest):
             "decision": decision.model_dump(),
             "tool_calls": tool_calls,
             "has_weather": weather is not None,
+            "has_attractions": attractions is not None,
+            "attractions_count": len(attractions_list),
         })
 
 
@@ -443,21 +557,21 @@ def create_plan(req: PlanRequest):
             parsed=parsed.model_dump(),
             decision=decision.model_dump(),
             weather=weather.model_dump() if weather is not None else None,
+            attractions=attractions.model_dump() if attractions is not None else None,
             itinerary=itinerary,
             status="ok",
             duration_ms=duration_ms,
-       )
-
-
+            )
 
 
         return PlanResponse(
             request_id=request_id,
-            summary="Generated itinerary using structured input and weather data.",
+            summary="Generated itinerary using structured input, weather and attractions data.",
             itinerary=itinerary,
             parsed=parsed,
             decision=decision,
             weather=weather,
+            attractions=attractions,
         )
 
     except HTTPException as e:

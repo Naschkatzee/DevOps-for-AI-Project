@@ -436,17 +436,19 @@ def create_plan(req: PlanRequest):
         REQUEST_LATENCY.observe(time.time() - req_start)
 
 
-    insert_plan(
-        plan_id=request_id,
-        created_at=datetime.now(timezone.utc).isoformat(),
-        query_preview=query_preview,
-        parsed=parsed.model_dump(),
-        decision=decision.model_dump(),
-        weather=weather.model_dump() if weather is not None else None,
-        itinerary=itinerary,
-        status="ok",
-        duration_ms=duration_ms,
-    )
+        insert_plan(
+    	    plan_id=request_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            query_preview=query_preview,
+            parsed=parsed.model_dump(),
+            decision=decision.model_dump(),
+            weather=weather.model_dump() if weather is not None else None,
+            itinerary=itinerary,
+            status="ok",
+            duration_ms=duration_ms,
+       )
+
+
 
 
         return PlanResponse(

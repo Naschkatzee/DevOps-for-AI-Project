@@ -1,236 +1,295 @@
-# DevOps for AI – Vacation Agent Service
+# Vacation Agent -- DevOps for AI Project
 
-## Project Overview
+This project implements a production-style AI agent service that takes a
+free-text vacation request, parses it using an LLM, decides which tools
+to call (weather, attractions), generates a structured itinerary, and
+runs inside a fully containerized and Kubernetes-deployed environment
+with CI/CD automation.
 
-This project was developed for the university course **“DevOps for AI.”**
+The goal of this project is to demonstrate **DevOps principles applied to AI systems**.
 
-It implements an AI-powered vacation planning service and demonstrates how a Large Language Model (LLM) can be integrated into a structured, controlled, observable, and reproducible backend system.
-
-The goal of this project is not just to use AI, but to show how AI systems can be engineered using professional DevOps principles.
-
----
-
-## Core Idea
-
-The system combines:
-
-- Probabilistic AI (LLM reasoning)
-- Deterministic backend logic
-- Schema validation
-- External tool integration
-- Monitoring and logging
-- Containerization for reproducibility
-
-Instead of building a chatbot, this project builds a **controlled AI agent service**.
-
----
+------------------------------------------------------------------------
 
 ## What the Service Does
 
 The API receives a natural language request such as:
 
-> “I want a 4-day trip in May to Barcelona, budget €800, I like culture and food, starting from Berlin.”
+> "I want a 4-day trip in May to Barcelona, budget €800, I like culture
+> and food, starting from Berlin."
 
 The system then:
 
-1. Parses the request using a local LLM (Ollama)
-2. Validates the structured output using Pydantic schemas
-3. Applies deterministic decision logic
-4. Calls external APIs (Open-Meteo for weather)
-5. Generates a day-by-day itinerary using the LLM
-6. Logs execution details for traceability
-7. Exposes metrics for monitoring
+1. Parses the request using an LLM (Ollama) into structured JSON
+2. Validates and normalizes the structured output using Pydantic schemas
+3. Applies decision logic (if/else) to decide which tools to call (weather, attractions, etc.)
+4. Calls external APIs (Open-Meteo geocoding + weather, and optionally Overpass for attractions)
+5. Generates a day-by-day itinerary using the LLM (grounded in tool results)
+6. Logs execution details (request ID, timings, tool usage, status) for traceability
+7. Exposes Prometheus metrics for monitoring
 8. Returns a structured JSON response
+9. Persists request and result data in a SQLite database for traceability and auditing
 
-This ensures AI output is controlled, validated, and observable.
+The service is containerized with Docker and can be deployed to Kubernetes using Helm, 
+with CI building and publishing container images to GitHub Container Registry (GHCR) via GitHub Actions.
 
----
+------------------------------------------------------------------------
 
-## Architecture
+# Architecture
 
-### Technology Stack
+User → FastAPI → LLM (Ollama)\
+                    ↘ Weather API (Open-Meteo)\
+                    ↘ Attractions API\
+                    ↘ SQLite (Persistence)\
+                    ↘ Prometheus Metrics
 
-- **FastAPI** – REST API framework
-- **Ollama** – Local LLM runtime
-- **Pydantic** – Schema validation
-- **Open-Meteo** – Weather API
-- **Prometheus Client** – Metrics
-- **Docker** – Containerization
+------------------------------------------------------------------------
 
-### Processing Flow
+# Overview
 
-User → API → LLM → Schema Validation → Decision Logic → External Tools → Itinerary Generation → Audit Log + Metrics → JSON Response
+The project started with creating a simple FastAPI service that exposes basic endpoints such as /healthz, /readyz, and /docs. This provided a clear API structure and allowed health checks, which are important for monitoring and CI pipelines. Input validation was implemented using Pydantic models to make sure that user requests are structured correctly and that invalid data is rejected early.
 
----
+Next, a local LLM (via Ollama) was integrated to transform natural language travel requests into structured JSON data. The output of the LLM was validated against predefined schemas to ensure consistency and reliability. Decision logic was then added using explicit if/else rules to determine which external tools (e.g., weather or attractions APIs) should be called. This ensured that the overall system flow remains predictable and not fully controlled by the AI model.
 
-## DevOps Implementation Steps
+External APIs were integrated to enrich the generated travel plans with real weather data and attractions information. Based on the structured input and tool results, the LLM generated a daily itinerary. Additional validation and normalization steps were included to handle incorrect or unexpected model outputs.
 
-### Step 1 – Service Skeleton
+Audit logging was implemented to store request details in a JSONL log file and in a SQLite database. This improves traceability and helps with debugging and analysis. Prometheus metrics were added to monitor request counts, error rates, latency, and tool usage. This improves observability and allows performance analysis.
 
-- FastAPI application
-- `/docs`
-- `/healthz`
-- `/readyz`
+The application was containerized using Docker to ensure reproducible builds and consistent runtime environments. Kubernetes deployment was implemented using Helm charts, following Infrastructure as Code principles. Horizontal Pod Autoscaling (HPA) was configured to automatically scale the application based on CPU usage.
 
-**Meaning:** Establish a production-style API structure with health endpoints and API documentation.
+A CI/CD pipeline was created using GitHub Actions. The pipeline checks the code, installs dependencies, builds a Docker image, and pushes it to GitHub Container Registry (GHCR). This ensures automated and reproducible builds. Finally, SQLite persistence was added to store structured request data in a database, enabling long-term storage and analysis of generated travel plans.
 
----
+------------------------------------------------------------------------
 
-### Step 2 – Input Validation
+# How to Run the Project
 
-- Defined `PlanRequest` schema
-- Validated user input before processing
+## Open the Project Folder
 
-**Meaning:** Prevent invalid/unsafe inputs and ensure the system fails early with clear errors.
-
----
-
-### Step 3 – Structured LLM Parsing
-
-- LLM converts free text into structured JSON
-- Output validated using Pydantic models (with normalization)
-
-**Meaning:** Make AI output deterministic and testable by forcing a strict schema.
-
----
-
-### Step 4 – Deterministic Decision Logic
-
-- Explicit `if/else` rules determine which tools to call
-- AI does not control system flow
-
-**Meaning:** Predictable control and safer agent behavior (LLM supports the pipeline, but does not run it).
-
----
-
-### Step 5 – External Tool Integration
-
-- Geocoding API (Open-Meteo geocoding)
-- Weather API (Open-Meteo forecast)
-- Tool results included in final output
-
-**Meaning:** Ground the AI response in real data and handle real-world failures (timeouts, missing data).
-
----
-
-### Step 6 – Itinerary Generation
-
-- LLM generates daily plan using structured input + weather summary
-- Output validated and normalized
-
-**Meaning:** Separate “creative generation” from data retrieval and control logic, and validate outputs like in production.
-
----
-
-### Step 7 – Audit Logging
-
-- Each request gets a UUID
-- Execution time measured
-- Tool calls logged
-- Success and error cases recorded
-- Logs stored in JSONL format in `data/audit_log.jsonl`
-
-**Meaning:** Traceability and governance (debugging, accountability, reproducibility of decisions).
-
----
-
-### Step 8 – Monitoring and Metrics
-
-Prometheus metrics added:
-
-- Total requests
-- Successful requests
-- Failed requests
-- Request latency
-- LLM latency
-- Tool latency
-
-Exposed via:
-
-- `GET /metrics`
-
-**Meaning:** Observability for production systems (performance tracking, error detection, later dashboards/autoscaling).
-
----
-
-### Step 9 – Docker Containerization
-
-- Created `Dockerfile`
-- Created `.dockerignore`
-- Built Docker image
-- Verified API runs inside container
-
-**Meaning:** Reproducibility and portability (the same application runs consistently on any machine with Docker).
-
----
-
-## Running the Project
-
-### Option 1 – Local Development
-
-Start Ollama:
-
-```bash
-ollama run llama3.2
+``` bash
+cd ~/vacation-agent
+ls
 ```
 
-Create environment:
+Expected folders:
 
-```bash
+-   app/
+-   requirements.txt
+-   Dockerfile
+-   helm/
+-   .github/
+-   scripts/
+
+------------------------------------------------------------------------
+
+## Check Required Ports (Common Issue)
+
+### Port 8000 (FastAPI)
+
+``` bash
+ss -ltnp | grep ':8000' || echo "8000 is free"
+```
+
+If occupied:
+
+``` bash
+sudo fuser -k 8000/tcp
+```
+
+### Port 11434 (Ollama)
+
+``` bash
+ss -ltnp | grep ':11434' || echo "11434 is free"
+```
+
+If LISTEN appears, Ollama is already running (this is fine).
+
+------------------------------------------------------------------------
+
+## Verify Ollama (LLM Dependency)
+
+### Check if Ollama is reachable
+
+``` bash
+curl -s http://127.0.0.1:11434/api/tags | head
+```
+
+If no connection:
+
+``` bash
+ollama serve
+```
+
+### Ensure model exists
+
+``` bash
+ollama list | grep -E 'llama3|llama3.2' || echo "model not found"
+```
+
+If missing:
+
+``` bash
+ollama pull llama3.2
+```
+
+------------------------------------------------------------------------
+
+## Local Development (Python)
+
+### Create an environment (if it already exists proceed to the "Activate venv")
+
+Inside the project root (~/vacation-agent), run:
+
+``` bash
 python3 -m venv .venv
+```
+
+### Activate venv
+
+``` bash
 source .venv/bin/activate
+```
+
+### Install dependencies
+
+``` bash
 pip install -r requirements.txt
 ```
 
-Start API:
+### Start API
 
-```bash
-uvicorn app.main:app --reload
+``` bash
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Open:
 
-- http://127.0.0.1:8000/docs
+http://127.0.0.1:8000/docs
 
----
 
-### Option 2 – Docker (Recommended)
 
-Build image:
+------------------------------------------------------------------------    
+    
+## Health Check
 
-```bash
+``` bash
+curl -s http://127.0.0.1:8000/healthz
+```
+
+
+Expected:
+
+{"status":"ok"}
+
+
+------------------------------------------------------------------------
+
+## Docker Usage
+(Precondition: the local uvicorn is not running)
+
+## Build Image
+
+``` bash
 docker build -t vacation-agent-api:0.1 .
 ```
 
-Run container (Linux):
+## Run Container
 
-```bash
-docker run --rm --network host vacation-agent-api:0.1
+``` bash
+docker run --rm --network=host \
+  -e OLLAMA_URL=http://127.0.0.1:11434/api/generate \
+  vacation-agent-api:0.1
 ```
 
-Open:
+------------------------------------------------------------------------
 
-- http://127.0.0.1:8000/docs
+## Kubernetes Deployment (k3d)
 
----
+Create cluster:
 
-## Available Endpoints
+``` bash
+k3d cluster create devops-ai
+```
 
-- `POST /v1/plan` – Generate vacation plan
-- `GET /healthz` – Liveness check
-- `GET /readyz` – Readiness check
-- `GET /metrics` – Prometheus metrics
-- `GET /docs` – Swagger UI
+=> A context named "k3d-devops-ai" should be created
 
----
+If multiple clusters are available, do the following safety step to ensure 
+the correct cluster is selected before proceeding.:
 
-## Next Steps (Planned)
+``` bash
+kubectl config use-context k3d-devops-ai
+```
 
-- Kubernetes deployment (Deployment/Service/Ingress)
-- Helm chart for reproducible K8s installs
-- Autoscaling (HPA)
-- CI/CD pipeline (GitHub Actions)
-- Security (secrets, scanning)
 
----
+Deploy via Helm:
 
+``` bash
+helm upgrade --install vacation-agent ./helm/vacation-agent
+```
+
+Check:
+
+``` bash
+kubectl get pods
+kubectl get svc
+kubectl get hpa
+```
+
+------------------------------------------------------------------------
+
+## CI/CD Deployment
+
+
+On push to `main`:
+
+-   Build Docker image
+-   Push to GHCR
+-   Tag with commit SHA
+
+------------------------------------------------------------------------
+
+## Local Kubernetes Deployment (k3d)
+
+Build locally:
+
+``` bash
+./scripts/deploy-local-build.sh devops-ai
+```
+
+Using GHCR image:
+
+``` bash
+./scripts/deploy-local-ghcr.sh devops-ai
+```
+
+------------------------------------------------------------------------
+
+
+## Verify Deployment
+
+``` bash
+kubectl get pods
+kubectl get svc
+kubectl get ingress
+kubectl get hpa
+kubectl top pods
+```
+
+------------------------------------------------------------------------
+
+## Metrics
+
+``` bash
+curl http://127.0.0.1:8000/metrics
+```
+
+------------------------------------------------------------------------
+
+## Database Inspection
+
+``` bash
+sqlite3 data/vacation_agent.db
+SELECT COUNT(*) FROM plans;
+```
+
+Should return ≥ 1.
+
+------------------------------------------------------------------------
